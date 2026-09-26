@@ -1,0 +1,111 @@
+import math
+import torch
+import torch.nn as nn
+
+
+class IntuitionisticTripletEvidence(nn.Module):
+
+
+    def __init__(self, n_balls, n_clusters):
+        super().__init__()
+        self.n_balls = n_balls
+        self.n_clusters = n_clusters
+        self.mu_logits = nn.Parameter(torch.zeros(n_balls, n_clusters))
+        self.nu_logits = nn.Parameter(torch.zeros(n_balls, n_clusters))
+
+    def get_triplets(self):
+
+        raw = torch.stack([self.mu_logits, self.nu_logits], dim=-1)  # [N_G, K, 2]
+        p = torch.softmax(raw, dim=-1)
+        mu = p[..., 0]
+        nu = p[..., 1]
+        pi = 1.0 - mu - nu
+
+        mu = torch.clamp(mu, 1e-8, 1.0)
+        nu = torch.clamp(nu, 1e-8, 1.0)
+        pi = torch.clamp(pi, 1e-8, 1.0)
+        s = mu + nu + pi
+        return mu / s, nu / s, pi / s
+
+    def signed_coefficient(self):
+
+        mu, nu, _ = self.get_triplets()
+        return mu - nu
+
+    def residual(self, c_b, H):
+
+        w = self.signed_coefficient()
+
+        Hw = w @ H
+        return c_b - Hw
+
+    @staticmethod
+    def negative_entropy(p):
+
+        p = torch.clamp(p, min=1e-12)
+        return (p * torch.log(p)).sum()
+
+    def negative_entropy_loss(self):
+
+        mu, nu, pi = self.get_triplets()
+        return (self.negative_entropy(mu)
+                + self.negative_entropy(nu)
+                + self.negative_entropy(pi))
+
+    @torch.no_grad()
+    def update_assignment(self, c_b, H, Sigma_inv, alpha, beta, lambda_1,
+                          n_inner=1):
+
+
+        mu, nu, pi = self.get_triplets()
+        p = torch.stack([mu, nu, pi], dim=-1)  # [N_G, K, 3]
+
+        for _ in range(n_inner):
+            v = self.residual(c_b, H)  # [N_G, d_b]
+            # u_ij = 2 alpha_i h_j^T Sigma^{-1} v_i
+  
+            Sinv_v = v @ Sigma_inv.T  
+            # h_j^T Sinv_v -> [N_G, K]
+            u = 2.0 * alpha[:, None] * (Sinv_v @ H.T)
+            # g_ijr: r=0 -> -u_ij, r=1 -> +u_ij, r=2 -> 0
+            g = torch.stack([-u, u, torch.zeros_like(u)], dim=-1)  # [N_G, K, 3]
+
+            log_p = torch.log(torch.clamp(p, min=1e-12))
+            z = (log_p - beta[:, None, None] * g) / (1.0 + beta[:, None, None] * lambda_1)
+            z = z - z.max(dim=-1, keepdim=True).values
+            p = torch.softmax(z, dim=-1)
+
+
+        p = torch.clamp(p, min=1e-8)
+        p = p / p.sum(dim=-1, keepdim=True)
+        self.mu_logits.data = torch.log(p[..., 0])
+        self.nu_logits.data = torch.log(p[..., 1])
+        return p
+
+    @torch.no_grad()
+    def inherit_by_overlap(self, new_index_sets, old_index_sets, mu, nu, pi):
+
+        N_G = len(new_index_sets)
+        K = mu.shape[1]
+        new_mu = torch.zeros_like(mu)
+        new_nu = torch.zeros_like(nu)
+        new_pi = torch.zeros_like(pi)
+        for l in range(N_G):
+            new_set = set(new_index_sets[l].tolist())
+            if len(new_set) == 0:
+                continue
+            for i, old_set in enumerate(old_index_sets):
+                old_set = set(old_set.tolist())
+                inter = len(new_set & old_set)
+                if inter == 0:
+                    continue
+                frac = inter / len(new_set)
+                new_mu[l] += frac * mu[i]
+                new_nu[l] += frac * nu[i]
+                new_pi[l] += frac * pi[i]
+
+        s = new_mu + new_nu + new_pi + 1e-12
+        new_mu, new_nu, new_pi = new_mu / s, new_nu / s, new_pi / s
+        self.mu_logits.data = torch.log(torch.clamp(new_mu, min=1e-8))
+        self.nu_logits.data = torch.log(torch.clamp(new_nu, min=1e-8))
+        return new_mu, new_nu, new_pi
