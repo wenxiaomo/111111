@@ -1,0 +1,77 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class GBAutoEncoder(nn.Module):
+
+    def __init__(self, feat_dim, hidden_dims=(128, 64), latent_dim=32):
+        super().__init__()
+
+        self.feat_dim = feat_dim
+        self.latent_dim = latent_dim
+        self.center_dim = latent_dim - 2
+        assert self.center_dim >= 1
+
+        input_dim = feat_dim + 2
+
+        enc_layers = []
+        prev = input_dim
+        for h in hidden_dims:
+            enc_layers += [nn.Linear(prev, h), nn.LayerNorm(h), nn.GELU()]
+            prev = h
+        enc_layers += [nn.Linear(prev, latent_dim), nn.LayerNorm(latent_dim), nn.GELU()]
+        self.encoder = nn.Sequential(*enc_layers)
+
+        dec_layers = []
+        prev = latent_dim
+        for h in reversed(hidden_dims):
+            dec_layers += [nn.Linear(prev, h), nn.GELU()]
+            prev = h
+        dec_layers += [nn.Linear(prev, feat_dim)]
+        self.decoder_center = nn.Sequential(*dec_layers)
+
+        h_r = max(16, latent_dim // 4)
+        self.decoder_radius = nn.Sequential(
+            nn.Linear(latent_dim, h_r), nn.GELU(),
+            nn.Linear(h_r, 1), nn.Softplus()
+        )
+        self.decoder_eta = nn.Sequential(
+            nn.Linear(latent_dim, h_r), nn.GELU(),
+            nn.Linear(h_r, 1), nn.Sigmoid()
+        )
+
+    def encode(self, s):
+        """s: [N_G, d0+2] -> z: [N_G, latent_dim]。"""
+        return self.encoder(s)
+
+    def split_latent(self, z):
+        c_b = z[:, :self.center_dim]
+        r_b = F.softplus(z[:, self.center_dim])
+        eta_b = torch.sigmoid(z[:, self.center_dim + 1])
+        return c_b, r_b, eta_b
+
+    def decode(self, z):
+        c_hat = self.decoder_center(z)
+        r_hat = self.decoder_radius(z).squeeze(-1)
+        eta_hat = self.decoder_eta(z).squeeze(-1)
+        return c_hat, r_hat, eta_hat
+
+    def forward(self, s):
+        z = self.encode(s)
+        c_b, r_b, eta_b = self.split_latent(z)
+        c_hat, r_hat, eta_hat = self.decode(z)
+        return {
+            'z': z, 'c_b': c_b, 'r_b': r_b, 'eta_b': eta_b,
+            'c_hat': c_hat, 'r_hat': r_hat, 'eta_hat': eta_hat,
+        }
+
+    @staticmethod
+    def reconstruction_loss(out, s):
+        c = s[:, :-2]
+        r = s[:, -2]
+        eta = s[:, -1]
+        loss_c = 0.5 * F.mse_loss(out['c_hat'], c, reduction='sum')
+        loss_r = 0.5 * F.mse_loss(out['r_hat'], r, reduction='sum')
+        loss_e = 0.5 * F.mse_loss(out['eta_hat'], eta, reduction='sum')
+        return loss_c + loss_r + loss_e
