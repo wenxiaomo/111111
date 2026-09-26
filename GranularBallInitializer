@@ -1,0 +1,32 @@
+class GranularBallInitializer:
+    """
+    对应论文 §3.1 Granular-Ball Initialization and Intrinsic Hesitation
+    以及附录 B.1 Initialization / B.3 Descriptor Recomputation。
+    """
+    def __init__(self, n_balls, tau=1.0):
+        self.n_balls = n_balls
+        self.tau = tau
+
+    def ball_kmeans(self, X):
+        """Ball k-means 初始化，返回样本到球的索引集 {I_i}。"""
+        # TODO: 用 Ball k-means 替换当前 KMeans
+        raise NotImplementedError
+
+    def compute_descriptor(self, X, index_sets):
+        """
+        对每个球 i 计算:
+          c_i = mean(X[I_i])
+          r_i = max_{k in I_i} ||x_k - c_i||_2
+          sigma_i = mean_{k in I_i} ||x_k - c_i||_2
+          eta_i = sigma_i / (sigma_i + tau)
+        返回结构化描述子 s_i = [c_i, r_i, eta_i]。
+        """
+        raise NotImplementedError
+
+    def init(self, X):
+        """初始化，返回 (centers, radii, etas, sample_ball_id, index_sets)。"""
+        raise NotImplementedError
+
+    def recompute(self, X, index_sets):
+        """动态重建时使用，按新划分重算描述子（附录 B.3）。"""
+        return self.compute_descriptor(X, index_sets)
