@@ -1,10 +1,4 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
-
 class GBAutoEncoder(nn.Module):
-
     def __init__(self, feat_dim, hidden_dims=(128, 64), latent_dim=32):
         super().__init__()
 
@@ -18,9 +12,17 @@ class GBAutoEncoder(nn.Module):
         enc_layers = []
         prev = input_dim
         for h in hidden_dims:
-            enc_layers += [nn.Linear(prev, h), nn.LayerNorm(h), nn.GELU()]
+            enc_layers += [
+                nn.Linear(prev, h),
+                nn.LayerNorm(h),
+                nn.GELU(),
+            ]
             prev = h
-        enc_layers += [nn.Linear(prev, latent_dim), nn.LayerNorm(latent_dim), nn.GELU()]
+        enc_layers += [
+            nn.Linear(prev, latent_dim),
+            nn.LayerNorm(latent_dim),
+            nn.GELU(),
+        ]
         self.encoder = nn.Sequential(*enc_layers)
 
         dec_layers = []
@@ -33,16 +35,19 @@ class GBAutoEncoder(nn.Module):
 
         h_r = max(16, latent_dim // 4)
         self.decoder_radius = nn.Sequential(
-            nn.Linear(latent_dim, h_r), nn.GELU(),
-            nn.Linear(h_r, 1), nn.Softplus()
+            nn.Linear(latent_dim, h_r),
+            nn.GELU(),
+            nn.Linear(h_r, 1),
+            nn.Softplus(),
         )
         self.decoder_eta = nn.Sequential(
-            nn.Linear(latent_dim, h_r), nn.GELU(),
-            nn.Linear(h_r, 1), nn.Sigmoid()
+            nn.Linear(latent_dim, h_r),
+            nn.GELU(),
+            nn.Linear(h_r, 1),
+            nn.Sigmoid(),
         )
 
     def encode(self, s):
-        """s: [N_G, d0+2] -> z: [N_G, latent_dim]。"""
         return self.encoder(s)
 
     def split_latent(self, z):
@@ -62,8 +67,13 @@ class GBAutoEncoder(nn.Module):
         c_b, r_b, eta_b = self.split_latent(z)
         c_hat, r_hat, eta_hat = self.decode(z)
         return {
-            'z': z, 'c_b': c_b, 'r_b': r_b, 'eta_b': eta_b,
-            'c_hat': c_hat, 'r_hat': r_hat, 'eta_hat': eta_hat,
+            "z": z,
+            "c_b": c_b,
+            "r_b": r_b,
+            "eta_b": eta_b,
+            "c_hat": c_hat,
+            "r_hat": r_hat,
+            "eta_hat": eta_hat,
         }
 
     @staticmethod
@@ -71,7 +81,8 @@ class GBAutoEncoder(nn.Module):
         c = s[:, :-2]
         r = s[:, -2]
         eta = s[:, -1]
-        loss_c = 0.5 * F.mse_loss(out['c_hat'], c, reduction='sum')
-        loss_r = 0.5 * F.mse_loss(out['r_hat'], r, reduction='sum')
-        loss_e = 0.5 * F.mse_loss(out['eta_hat'], eta, reduction='sum')
+
+        loss_c = 0.5 * F.mse_loss(out["c_hat"], c, reduction="sum")
+        loss_r = 0.5 * F.mse_loss(out["r_hat"], r, reduction="sum")
+        loss_e = 0.5 * F.mse_loss(out["eta_hat"], eta, reduction="sum")
         return loss_c + loss_r + loss_e
